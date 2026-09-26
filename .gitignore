@@ -2,6 +2,10 @@
 __pycache__/
 *.py[codz]
 *$py.class
+.kilo
+*.db
+output
+backup
 
 # C extensions
 *.so
