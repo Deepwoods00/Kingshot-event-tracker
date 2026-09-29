@@ -38,9 +38,12 @@ def export_data_to_csv(prefix, headers, data_rows):
         # newline='' 用于防止在 Windows 系统下输出产生多余的空行
         with open(filepath, mode='w', encoding='utf-8-sig', newline='') as f:
             writer = csv.writer(f)
-            # 先写入表头
+            # 先写入表头（支持多行表头）
             if headers:
-                writer.writerow(headers)
+                if isinstance(headers[0], list):
+                    writer.writerows(headers)
+                else:
+                    writer.writerow(headers)
             # 再批量写入数据行
             if data_rows:
                 writer.writerows(data_rows)
@@ -116,9 +119,14 @@ def export_merged_event_scores(db_file, target_aids, target_events):
     cursor = conn.cursor()
     
     try:
-        # 1. 获取活动字典
-        cursor.execute("SELECT Event_ID, Event_Name FROM Event_Catalog")
-        event_catalog = dict(cursor.fetchall())
+        # 1. 获取活动字典和最低分
+        cursor.execute("SELECT Event_ID, Event_Name, Minimum_points FROM Event_Catalog")
+        event_catalog = {}
+        min_scores = {}
+        for eid, ename, mscore in cursor.fetchall():
+            event_catalog[eid] = ename
+            # 处理空缺数据用1代替
+            min_scores[eid] = int(mscore) if mscore else 1
         
         # 2. 获取联盟字典 (AID -> Tag)
         cursor.execute("SELECT AID, Tag FROM Alliance_Info")
@@ -172,12 +180,16 @@ def export_merged_event_scores(db_file, target_aids, target_events):
         sorted_cols = sorted(list(cols_set), key=lambda x: x[0])  # 次要排序
         sorted_cols.sort(key=lambda x: x[1], reverse=True)        # 主要排序
         
-        # 构造表头
-        headers = ["Alliance", "UID", "Name"]
+        # 构造两行表头
+        header_row1 = ["", "", ""]
+        header_row2 = ["Alliance", "UID", "Name"]
         for eid, ts in sorted_cols:
             ename = event_catalog.get(eid, eid)
-            # 在同一格内分两行显示：活动名在第一行，日期在第二行
-            headers.append(f"{ename}\n{ts}")
+            # 第一行：活动名和日期占用第一格，比值列的表头留空以在Excel中达成合并效果
+            header_row1.extend([f"{ename}\n{ts}", ""])
+            header_row2.extend(["score", "score/min"])
+            
+        headers = [header_row1, header_row2]
             
         # 构造行数据
         data_rows = []
@@ -185,8 +197,13 @@ def export_merged_event_scores(db_file, target_aids, target_events):
             name, tag, aid = player_info.get(uid, ("未知", "未知", "未知"))
             row = [tag, uid, name]
             for col in sorted_cols:
+                eid, ts = col
                 # 如果没有参加该活动，填 0
-                row.append(player_scores.get(uid, {}).get(col, 0))
+                score = player_scores.get(uid, {}).get(col, 0)
+                min_score = min_scores.get(eid, 1) # 默认1避免除0错误
+                ratio = round(score / min_score, 2) if min_score else 0
+                
+                row.extend([score, ratio])
             data_rows.append(row)
             
         # 按 联盟 -> 名字 排序

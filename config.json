@@ -1,7 +1,8 @@
 {
   "api_key": "kss_gwmE_DlGXUxA8BNAWxco6bvjyx2xdmscHsLJ9QvAkSA",
+  "db_file": "kingshot_data.db",
   "targets": {
     "850": ["TOP", "GOD", "XII", "TLG", "Egg", "BRO", "god"]
   },
-  "db_file": "kingshot_data.db"
+  "core_alliances": ["85900074", "85900006", "85900266", "85900001"]
 }

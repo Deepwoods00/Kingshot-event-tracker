@@ -22,16 +22,52 @@ def init_database(db_filename):
     ''')
 
     # 2. 玩家状态快照表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS Player_Snapshot (
-            Timestamp TEXT NOT NULL,
-            UID TEXT NOT NULL,
-            Power INTEGER,
-            Alliance TEXT,
-            Last_Login TEXT,
-            PRIMARY KEY (Timestamp, UID)
-        )
-    ''')
+    # 检查表里有没有 Name 这一列，进行无损升级
+    cursor.execute("PRAGMA table_info(Player_Snapshot)")
+    columns = [col[1] for col in cursor.fetchall()]
+    
+    if columns and 'Name' not in columns:
+        print("[*] 检测到旧版 Player_Snapshot 表，正在安全升级加入 Name 列...")
+        cursor.execute('ALTER TABLE Player_Snapshot RENAME TO Player_Snapshot_old')
+        cursor.execute('''
+            CREATE TABLE Player_Snapshot (
+                Timestamp TEXT NOT NULL,
+                UID TEXT NOT NULL,
+                Name TEXT,
+                Power INTEGER,
+                Alliance TEXT,
+                Last_Login TEXT,
+                PRIMARY KEY (Timestamp, UID)
+            )
+        ''')
+        # 将旧数据插回，Name 用 Player_Info 里的补全，Alliance 尝试映射成 TAG
+        cursor.execute('''
+            INSERT INTO Player_Snapshot (Timestamp, UID, Name, Power, Alliance, Last_Login)
+            SELECT 
+                s.Timestamp, 
+                s.UID, 
+                p.Name, 
+                s.Power, 
+                COALESCE(a.Tag, s.Alliance), 
+                s.Last_Login 
+            FROM Player_Snapshot_old s
+            LEFT JOIN Player_Info p ON s.UID = p.UID
+            LEFT JOIN Alliance_Info a ON s.Alliance = a.AID
+        ''')
+        cursor.execute('DROP TABLE Player_Snapshot_old')
+        print("[+] Player_Snapshot 升级完毕。")
+    elif not columns:
+        cursor.execute('''
+            CREATE TABLE Player_Snapshot (
+                Timestamp TEXT NOT NULL,
+                UID TEXT NOT NULL,
+                Name TEXT,
+                Power INTEGER,
+                Alliance TEXT,
+                Last_Login TEXT,
+                PRIMARY KEY (Timestamp, UID)
+            )
+        ''')
 
     # 3. 联盟信息表
     cursor.execute('''
@@ -43,27 +79,24 @@ def init_database(db_filename):
     ''')
 
     # 4. 活动目录表 (新加：用来存放预设的活动列表)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS Event_Catalog (
-            Event_ID TEXT PRIMARY KEY,
-            Event_Name TEXT NOT NULL
-        )
-    ''')
+    cursor.execute("PRAGMA table_info(Event_Catalog)")
+    columns = [col[1] for col in cursor.fetchall()]
+    
+    if columns and 'Minimum_points' not in columns:
+        print("[*] 检测到旧版 Event_Catalog 表，正在安全升级加入 Minimum_points 列...")
+        cursor.execute("ALTER TABLE Event_Catalog ADD COLUMN Minimum_points INTEGER DEFAULT 1")
+        print("[+] Event_Catalog 升级完毕。")
+    elif not columns:
+        cursor.execute('''
+            CREATE TABLE Event_Catalog (
+                Event_ID TEXT PRIMARY KEY,
+                Event_Name TEXT NOT NULL,
+                Minimum_points INTEGER DEFAULT 1
+            )
+        ''')
     
     # 初始化预设活动
-    default_events = [
-        ("KVK", "KVK"),
-        ("SG", "SG"),
-        ("Officer_Project", "Officer Project"),
-        ("Armament_Competition", "Armament Competition"),
-        ("Steel_Edge_Event", "Steel Edge Event"),
-        ("Stand_of_Arms", "Stand of Arms"),
-        ("Grow_Your_Heroes", "Grow Your Heroes")
-    ]
-    cursor.executemany('''
-        INSERT OR IGNORE INTO Event_Catalog (Event_ID, Event_Name) VALUES (?, ?)
-    ''', default_events)
-
+    # 移除硬编码注入
     # 5. 升级 活动积分大表 (加入 Timestamp)
     # 检查表里有没有 Timestamp 这一列
     cursor.execute("PRAGMA table_info(Event_Score)")
@@ -142,15 +175,6 @@ def get_all_snapshot_dates(db_filename):
     conn.close()
     return dates
 
-def get_all_snapshot_dates(db_filename):
-    """获取战力快照表中所有的记录日期（倒序）"""
-    conn = sqlite3.connect(db_filename)
-    cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT Timestamp FROM Player_Snapshot ORDER BY Timestamp DESC")
-    dates = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return dates
-
 def add_event(db_filename, event_id, event_name):
     """添加新的活动到预设活动列表"""
     conn = sqlite3.connect(db_filename)
@@ -210,13 +234,14 @@ def upsert_alliance_roster(db_filename, aid, alliance_info_dict, members_list):
 
             # 动作 2: UPSERT (插入或更新) 今日战力快照
             cursor.execute('''
-                INSERT INTO Player_Snapshot (Timestamp, UID, Power, Alliance, Last_Login)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO Player_Snapshot (Timestamp, UID, Name, Power, Alliance, Last_Login)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(Timestamp, UID) DO UPDATE SET
+                    Name = excluded.Name,
                     Power = excluded.Power,
                     Alliance = excluded.Alliance,
                     Last_Login = excluded.Last_Login
-            ''', (today_utc, uid, power, str_aid, last_login))
+            ''', (today_utc, uid, name, power, tag, last_login))
             
             success_count += 1
             
@@ -249,9 +274,11 @@ def upsert_single_player(db_filename, player_dict):
     power = int(player_dict.get("power", 0))
     last_login = str(player_dict.get("last_active_at", ""))
     
-    # 尝试提取他的联盟 aid
+    # 尝试提取他的联盟 aid 和 tag
     alliance_node = player_dict.get("alliance") or {}
     aid = str(alliance_node.get("aid", "")) # 如果没有联盟，就是空字符串
+    # 尝试拿 TAG，如果没有 TAG 就降级拿缩写 abbr，都没有就填 aid
+    tag = str(alliance_node.get("tag", alliance_node.get("abbr", aid)))
 
     conn = sqlite3.connect(db_filename)
     cursor = conn.cursor()
@@ -265,13 +292,14 @@ def upsert_single_player(db_filename, player_dict):
         ''', (uid, name, aid))
 
         cursor.execute('''
-            INSERT INTO Player_Snapshot (Timestamp, UID, Power, Alliance, Last_Login)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO Player_Snapshot (Timestamp, UID, Name, Power, Alliance, Last_Login)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(Timestamp, UID) DO UPDATE SET
+                Name = excluded.Name,
                 Power = excluded.Power,
                 Alliance = excluded.Alliance,
                 Last_Login = excluded.Last_Login
-        ''', (today_utc, uid, power, aid, last_login))
+        ''', (today_utc, uid, name, power, tag, last_login))
         
         conn.commit()
         return True

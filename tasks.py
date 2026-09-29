@@ -143,6 +143,23 @@ def _process_csv_and_match(csv_filepath, valid_ids, name_to_id_map, id_to_name_m
         
     return matched_data, unmatched_names
 
+def _prompt_input_date():
+    """辅助函数：让用户输入数据日期，支持留空使用今天"""
+    print("\n--- 设置数据日期 ---")
+    today_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    date_input = input(f"请输入这批数据所属的日期 (格式 YYYY-MM-DD) [直接回车默认为 {today_utc}]: ").strip()
+    
+    if not date_input:
+        return today_utc
+        
+    # 简单校验格式
+    try:
+        datetime.strptime(date_input, '%Y-%m-%d')
+        return date_input
+    except ValueError:
+        print(f"[-] 日期格式错误，已自动使用默认日期: {today_utc}")
+        return today_utc
+
 def task_import_csv(config):
     """任务：从 CSV 导入活动数据，遇到缺失 ID 自动调用 API 补全"""
     api_key = config.get("api_key")
@@ -192,8 +209,10 @@ def task_import_csv(config):
         event_id = events[choice_idx - 1][0]
         event_name = events[choice_idx - 1][1]
     
-    current_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-    print(f"\n[>>>] 开始处理 CSV 数据... (活动: {event_name}, 日期: {current_utc}) [<<<]")
+    # 呼出日期输入交互
+    target_date = _prompt_input_date()
+    
+    print(f"\n[>>>] 开始处理 CSV 数据... (活动: {event_name}, 日期: {target_date}) [<<<]")
     
     # 建立重试循环（最多执行2次，防止因 API 拉不到数据陷入无限死循环）
     for attempt in range(2):
@@ -202,7 +221,7 @@ def task_import_csv(config):
         
         # 2. 读取并在内存中匹配数据
         matched_data, unmatched = _process_csv_and_match(
-            csv_path, valid_ids, name_to_id_map, id_to_name_map, event_id, entity_type, current_utc
+            csv_path, valid_ids, name_to_id_map, id_to_name_map, event_id, entity_type, target_date
         )
         
         if unmatched is None and matched_data is None:
@@ -254,10 +273,10 @@ def task_import_csv(config):
 
 # ================= I/O 相关 =================
 
-def _prompt_alliance_selection(db_file):
+def _prompt_alliance_selection(db_file, config=None):
     """辅助函数：让用户选择联盟范围，返回选中的 AID 列表，或 'ALL'"""
     print("\n--- 联盟范围选择 ---")
-    print("1. 前四联盟 (TOP, GOD, TLG, XII)")
+    print("1. 核心联盟 (读取自 config.json: core_alliances)")
     print("2. 全部已录入联盟")
     print("3. 手动选择联盟 (输入序号)")
     
@@ -265,7 +284,11 @@ def _prompt_alliance_selection(db_file):
     target_aids = []
     
     if aly_choice == '1':
-        return ['85900074', '85900006', '85900266', '85900001']
+        if config and "core_alliances" in config:
+            return config["core_alliances"]
+        else:
+            print("[-] 配置文件中未定义 core_alliances。")
+            return None
     elif aly_choice == '2':
         return 'ALL'
     elif aly_choice == '3':
@@ -346,7 +369,7 @@ def task_export_data(config):
         sheet_output.export_event_scores(db_file, event_id)
         
     elif sub_choice == '3':
-        target_aids = _prompt_alliance_selection(db_file)
+        target_aids = _prompt_alliance_selection(db_file, config)
         if not target_aids:
             return
             
@@ -388,7 +411,7 @@ def task_export_data(config):
         sheet_output.export_merged_event_scores(db_file, target_aids, target_events)
         
     elif sub_choice == '4':
-        target_aids = _prompt_alliance_selection(db_file)
+        target_aids = _prompt_alliance_selection(db_file, config)
         if not target_aids:
             return
             
