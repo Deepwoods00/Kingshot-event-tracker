@@ -1,7 +1,7 @@
 import os
 import csv
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 def export_data_to_csv(prefix, headers, data_rows):
     """
@@ -176,13 +176,29 @@ def export_merged_event_scores(db_file, target_aids, target_events):
             print("[-] 该范围内没有找到任何积分数据。")
             return
             
+        # 找出近30天的非KVK活动，用于计算平均达标率
+        now_time = datetime.now()
+        
+        recent_non_kvk_cols = []
+        for eid, ts in cols_set:
+            ename = event_catalog.get(eid, eid)
+            if "kvk" not in ename.lower() and "kvk" not in eid.lower():
+                try:
+                    ts_date = datetime.strptime(ts, "%Y-%m-%d").date()
+                    if 0 <= (now_time.date() - ts_date).days <= 30:
+                        recent_non_kvk_cols.append((eid, ts))
+                except ValueError:
+                    pass
+                    
+        denominator = len(recent_non_kvk_cols)
+
         # 排序表头：时间倒序（最新在最左边），然后是活动ID
         sorted_cols = sorted(list(cols_set), key=lambda x: x[0])  # 次要排序
         sorted_cols.sort(key=lambda x: x[1], reverse=True)        # 主要排序
         
         # 构造两行表头
-        header_row1 = ["", "", ""]
-        header_row2 = ["Alliance", "UID", "Name"]
+        header_row1 = ["", "", "", "non kvk\n(within 30 days)"]
+        header_row2 = ["Alliance", "UID", "Name", "Avg(score/min)"]
         for eid, ts in sorted_cols:
             ename = event_catalog.get(eid, eid)
             # 第一行：活动名和日期占用第一格，比值列的表头留空以在Excel中达成合并效果
@@ -195,7 +211,19 @@ def export_merged_event_scores(db_file, target_aids, target_events):
         data_rows = []
         for uid in valid_uids:
             name, tag, aid = player_info.get(uid, ("未知", "未知", "未知"))
-            row = [tag, uid, name]
+            
+            # 计算30天平均达标率
+            total_ratio = 0.0
+            for col in recent_non_kvk_cols:
+                eid, ts = col
+                score = player_scores.get(uid, {}).get(col, 0)
+                min_score = min_scores.get(eid, 1)
+                ratio = score / min_score if min_score else 0
+                total_ratio += ratio
+                
+            avg_ratio = round(total_ratio / denominator, 2) if denominator > 0 else 0
+            
+            row = [tag, uid, name, avg_ratio]
             for col in sorted_cols:
                 eid, ts = col
                 # 如果没有参加该活动，填 0
