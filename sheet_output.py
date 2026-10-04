@@ -75,7 +75,7 @@ def export_latest_player_snapshots(db_file):
             SELECT p.Timestamp, p.UID, i.Name, p.Power, IFNULL(a.Tag, p.Alliance)
             FROM Player_Snapshot p
             LEFT JOIN Player_Info i ON p.UID = i.UID
-            LEFT JOIN Alliance_Info a ON p.Alliance = a.AID
+            LEFT JOIN Alliance_Info a ON i.Current_Alliance = a.AID
             WHERE p.Timestamp = (
                 SELECT MAX(Timestamp) 
                 FROM Player_Snapshot 
@@ -375,10 +375,10 @@ def export_snapshot_by_date(db_file, target_aids, date_str):
     cursor = conn.cursor()
     try:
         query = '''
-            SELECT IFNULL(a.Tag, p.Alliance), p.UID, i.Name, p.Power, p.Alliance
+            SELECT IFNULL(a.Tag, p.Alliance), p.UID, i.Name, p.Power, i.Current_Alliance
             FROM Player_Snapshot p
             LEFT JOIN Player_Info i ON p.UID = i.UID
-            LEFT JOIN Alliance_Info a ON p.Alliance = a.AID
+            LEFT JOIN Alliance_Info a ON i.Current_Alliance = a.AID
             WHERE p.Timestamp = ?
         '''
         cursor.execute(query, (date_str,))

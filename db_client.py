@@ -52,7 +52,7 @@ def init_database(db_filename):
                 s.Last_Login 
             FROM Player_Snapshot_old s
             LEFT JOIN Player_Info p ON s.UID = p.UID
-            LEFT JOIN Alliance_Info a ON s.Alliance = a.AID
+            LEFT JOIN Alliance_Info a ON p.Current_Alliance = a.AID
         ''')
         cursor.execute('DROP TABLE Player_Snapshot_old')
         print("[+] Player_Snapshot 升级完毕。")

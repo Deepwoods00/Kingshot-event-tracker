@@ -29,6 +29,7 @@ def init_database():
         CREATE TABLE IF NOT EXISTS Player_Snapshot (
             Timestamp TEXT NOT NULL,
             UID TEXT NOT NULL,
+            Name TEXT,
             Power INTEGER,
             Alliance TEXT,
             Last_Login TEXT,
@@ -43,12 +44,24 @@ def init_database():
             Event_ID TEXT NOT NULL,
             Entity_Type TEXT NOT NULL,
             Entity_ID TEXT NOT NULL,
+            Name TEXT,
+            Timestamp TEXT NOT NULL,
             Score INTEGER,
             Rank INTEGER,
-            PRIMARY KEY (Event_ID, Entity_Type, Entity_ID)
+            PRIMARY KEY (Event_ID, Entity_Type, Entity_ID, Timestamp)
         )
     ''')
     print("[-] Event_Score 表确认完毕。")
+
+    # --- 表 4: Alliance_Info ---
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Alliance_Info (
+            AID TEXT PRIMARY KEY,
+            Tag TEXT NOT NULL,
+            Name TEXT
+        )
+    ''')
+    print("[-] Alliance_Info 表确认完毕。")
 
     # 4. 提交保存并关闭连接
     conn.commit()
