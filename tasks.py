@@ -408,7 +408,7 @@ def task_export_data(config):
             print("[-] 无效选择。")
             return
             
-        sheet_output.export_merged_event_scores(db_file, target_aids, target_events)
+        sheet_output.export_merged_event_scores(db_file, target_aids, target_events, config=config)
         
     elif sub_choice == '4':
         target_aids = _prompt_alliance_selection(db_file, config)

@@ -2,6 +2,10 @@ import os
 import csv
 import sqlite3
 from datetime import datetime, timedelta
+from openpyxl import Workbook
+from openpyxl.styles import Border, Side, Alignment
+from openpyxl.utils import get_column_letter
+import gsheet_output
 
 def export_data_to_csv(prefix, headers, data_rows):
     """
@@ -110,7 +114,7 @@ def export_event_scores(db_file, event_id):
     finally:
         conn.close()
 
-def export_merged_event_scores(db_file, target_aids, target_events):
+def export_merged_event_scores(db_file, target_aids, target_events, config=None):
     """
     导出活动积分汇总大表（透视表）。
     第一列：联盟 Tag，第二列：玩家名字，后续列：各活动积分（最新日期在最左边）。
@@ -237,12 +241,130 @@ def export_merged_event_scores(db_file, target_aids, target_events):
         # 按 联盟 -> 名字 排序
         data_rows.sort(key=lambda x: (x[0], x[2]))
         
-        export_data_to_csv("Merged_EventScores", headers, data_rows)
+        # 1. 导出本地 Excel
+        excel_path = export_merged_to_excel("Merged_EventScores", headers, data_rows)
         
+        # 2. 如果配置了 google_sheet_id，推送到 Google Sheets
+        if config and config.get("google_sheet_id"):
+            print("\n[*] 检测到 google_sheet_id，准备推送到云端...")
+            gsheet_output.export_merged_to_gsheet(
+                headers=headers,
+                data_rows=data_rows,
+                spreadsheet_id=config.get("google_sheet_id")
+            )
+            
     except Exception as e:
         print(f"[-] 导出汇总表时发生错误: {e}")
     finally:
         conn.close()
+
+def export_merged_to_excel(prefix, headers, data_rows):
+    output_dir = "output"
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        
+    date_str = datetime.now().strftime("%Y%m%d")
+    seq = 1
+    while True:
+        filename = f"{prefix}_{date_str}_{seq}.xlsx"
+        filepath = os.path.join(output_dir, filename)
+        if not os.path.exists(filepath):
+            break
+        seq += 1
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+
+    # 1. 写入表头
+    if headers:
+        if isinstance(headers[0], list):
+            for row_data in headers:
+                ws.append(row_data)
+        else:
+            ws.append(headers)
+
+    # 2. 写入数据
+    for row_data in data_rows:
+        ws.append(row_data)
+
+    # 3. 样式设置
+    border_thick_right = Border(right=Side(style='medium'))
+    # 表头允许换行（因为包含 \n）
+    header_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    # 数据区域不自动换行
+    data_alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+        for cell in row:
+            col_idx = cell.column
+            row_idx = cell.row
+            
+            # 居中对齐，只有第一行表头允许换行（因为包含活动名和日期的 \n），其余均不换行
+            if row_idx == 1:
+                cell.alignment = header_alignment
+            else:
+                cell.alignment = data_alignment
+            
+            # 只有第4列和 >=6 的偶数列，右侧有加粗边框
+            if col_idx == 4 or (col_idx >= 6 and col_idx % 2 == 0):
+                cell.border = border_thick_right
+                
+            # 数字千分位格式 (仅针对第3行及以后的数据行)
+            if row_idx > 2:
+                if col_idx == 4 or (col_idx >= 6 and col_idx % 2 == 0):
+                    # 第4列 (Avg) 和所有 score/min 列：保留两位小数的千分位
+                    cell.number_format = '#,##0.00'
+                elif col_idx >= 5 and col_idx % 2 != 0:
+                    # 所有 score 列：整数千分位
+                    cell.number_format = '#,##0'
+
+    # 4. 合并活动名称单元格 (第一行)
+    # 假设数据从第5列开始，每2列为一个活动
+    for col_idx in range(5, ws.max_column, 2):
+        ws.merge_cells(start_row=1, start_column=col_idx, end_row=1, end_column=col_idx+1)
+
+    # 5. 冻结首2行和左侧4列 (指定光标停留在 E3 时，其上方和左侧将被冻结)
+    ws.freeze_panes = 'E3'
+
+    # 6. 模拟自适应列宽 (Auto-fit)
+    for col_idx in range(1, ws.max_column + 1):
+        max_length = 0
+        col_letter = get_column_letter(col_idx)
+        for row_idx in range(1, ws.max_row + 1):
+            # 跳过第一行的合并单元格(从第5列开始)，否则会把活动名的完整长度只算在单列上，导致那一列被撑得过大
+            if row_idx == 1 and col_idx >= 5:
+                continue
+                
+            cell_value = ws.cell(row=row_idx, column=col_idx).value
+            if cell_value is not None:
+                # 如果有换行，取最长的那一行
+                for line in str(cell_value).split('\n'):
+                    # 中文字符等非 ASCII 字符较宽，给予 1.7 的权重估算，普通字母数字给 1.1 的权重
+                    line_len = sum(1.7 if ord(c) > 127 else 1.1 for c in line)
+                    if line_len > max_length:
+                        max_length = line_len
+        
+        # 加上一点两侧的 Padding (空白间距)
+        adjusted_width = max_length + 2
+        
+        # 稍微加一点限制，保证下限和上限
+        if adjusted_width < 8: adjusted_width = 8
+        if adjusted_width > 50: adjusted_width = 50
+        
+        ws.column_dimensions[col_letter].width = adjusted_width
+
+    # 7. 添加全局数据过滤器
+    # 过滤器从第2行开始（因为第1行是合并的活动标题），覆盖整个数据区域
+    ws.auto_filter.ref = f"A2:{get_column_letter(ws.max_column)}{ws.max_row}"
+
+    try:
+        wb.save(filepath)
+        print(f"[+] 导出成功！Excel 文件已保存至: {filepath}")
+        return filepath
+    except Exception as e:
+        print(f"[-] 导出 Excel 失败: {e}")
+        return None
 
 def export_snapshot_by_date(db_file, target_aids, date_str):
     """
